@@ -1,0 +1,77 @@
+[
+  {
+    "question": "How much did I spend on food delivery in June 2026?",
+    "expected_answer_contains": ["1340"],
+    "note": "Swiggy 450 + Zomato 380 + Swiggy 510 = 1340"
+  },
+  {
+    "question": "What was my rent payment in June 2026?",
+    "expected_answer_contains": ["18000"],
+    "note": "Single rent transaction"
+  },
+  {
+    "question": "How much did I spend on subscriptions in June 2026?",
+    "expected_answer_contains": ["618"],
+    "note": "Netflix 499 + Spotify 119 = 618"
+  },
+  {
+    "question": "How much did I spend on groceries in June 2026?",
+    "expected_answer_contains": ["1850"],
+    "note": "Single BigBasket transaction"
+  },
+  {
+    "question": "How much did I spend on transport in June 2026?",
+    "expected_answer_contains": ["400.5", "400"],
+    "note": "Uber 220.5 + Uber 180 = 400.5"
+  },
+  {
+    "question": "How much did I spend on utilities in June 2026?",
+    "expected_answer_contains": ["1200"],
+    "note": "Single BESCOM electricity bill"
+  },
+  {
+    "question": "How much did I spend on shopping in June 2026?",
+    "expected_answer_contains": ["4498"],
+    "note": "Amazon 2999 + Flipkart 1499 = 4498"
+  },
+  {
+    "question": "How much did I spend at the pharmacy in June 2026?",
+    "expected_answer_contains": ["650"],
+    "note": "Single Apollo Pharmacy transaction; tests merchant-level, not just category-level, retrieval"
+  },
+  {
+    "question": "How much was my Amazon purchase in June 2026?",
+    "expected_answer_contains": ["2999"],
+    "note": "Tests specific-merchant retrieval within a shared category (shopping)"
+  },
+  {
+    "question": "How much salary did I receive in June 2026?",
+    "expected_answer_contains": ["55000"],
+    "note": "Tests handling of a credit (negative amount in the data) framed as a positive real-world question"
+  },
+  {
+    "question": "What was my single biggest expense in June 2026?",
+    "expected_answer_contains": ["18000", "rent"],
+    "note": "Tests cross-category reasoning (rent is the max single transaction), not a category filter"
+  },
+  {
+    "question": "How many transactions did I have in June 2026?",
+    "expected_answer_contains": ["15"],
+    "note": "Tests counting rather than summing; no category/month filter should narrow the data"
+  },
+  {
+    "question": "What was my total spending in June 2026?",
+    "expected_answer_contains": ["28976.5", "28976"],
+    "note": "Hardest question: requires summing across ALL categories correctly, excluding the salary credit"
+  },
+  {
+    "question": "What is a good savings rate to aim for?",
+    "expected_answer_contains": [],
+    "note": "This question needs NO transaction data (general advice). Checks that the planner correctly sets needs_data=false instead of always retrieving. Manually review the answer quality instead of checking a substring."
+  },
+  {
+    "question": "How much did I spend at Netflix in June 2026?",
+    "expected_answer_contains": ["499"],
+    "note": "Tests specific-merchant retrieval within subscriptions category"
+  }
+]
