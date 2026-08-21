@@ -4,6 +4,7 @@ instead of prose.
 """
 from datetime import date
 from enum import Enum
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -63,9 +64,24 @@ class FinSightState(BaseModel):
     transactions: list[Transaction] = Field(default_factory=list)
     answer: str | None = None
     report: MonthlyReport | None = None
-    route: str | None = None  # set by the supervisor's router node
+    # Literal type keeps this in sync with RouteDecision.destination and
+    # catches typos at type-check time instead of silently routing wrong.
+    route: Literal["rag", "analyze"] | None = None
     chat_history: list[dict] = Field(
         default_factory=list,
         description="Running list of {'role': 'user'|'assistant', 'content': str} "
         "so follow-up questions like 'what about last month?' have context.",
     )
+    # --- Self-correction loop fields (#3) -----------------------------------
+    # attempts counts how many times rag_node has run for this query.
+    attempts: int = 0
+    # answer_score is set by grade_node: 1.0 = programmatic check passed,
+    # 0.0 = number not found in answer, None = not yet graded.
+    answer_score: float | None = None
+    # low_confidence is True when all retry attempts exhausted without a
+    # passing grade — signals the UI to show a "please double-check" banner.
+    low_confidence: bool = False
+    # best_answer preserves the highest-scoring answer across loop iterations
+    # so if we exhaust retries the user still gets the best attempt, not
+    # just the last one.
+    best_answer: str | None = None

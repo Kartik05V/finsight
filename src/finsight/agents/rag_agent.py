@@ -19,8 +19,18 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from finsight.config import get_llm
+from finsight.config import get_llm, llm_call_with_retry
+from finsight.logging_setup import get_logger
 from finsight.models import Category, Transaction
+
+logger = get_logger(__name__)
+
+
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks emitted by reasoning models like Qwen.
+    The plan_retrieval json parser and the answer checker both need clean text.
+    """
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
 class RetrievalPlan(BaseModel):
@@ -33,7 +43,8 @@ class RetrievalPlan(BaseModel):
     reasoning: str
 
 
-PLANNER_PROMPT = """Given a user's question about their finances, decide whether
+PLANNER_PROMPT = """/no_think
+Given a user's question about their finances, decide whether
 you need to look up their transaction data, and if so, what filters to apply.
 
 category_filter must be one of exactly these values (or null): food, groceries,
@@ -48,6 +59,8 @@ EXACTLY as "YYYY-MM" (e.g. "2026-06") — never a natural language date like
 
 If the question can be answered without data (e.g. "what is a good savings
 rate?"), set needs_data to false.
+
+If the question is ambiguous or lacks context (e.g. "what about those?"), set needs_data to false.
 """
 
 _MONTH_FORMATS = ["%Y-%m", "%B %Y", "%b %Y", "%m/%Y"]
@@ -71,7 +84,7 @@ def normalize_month_filter(month_filter: str | None) -> str | None:
             return datetime.strptime(month_filter, fmt).strftime("%Y-%m")
         except ValueError:
             continue
-    print(f"[rag] warning: couldn't parse month_filter {month_filter!r}, ignoring it")
+    logger.warning(f"couldn't parse month_filter {month_filter!r}, ignoring it")
     return None
 
 
@@ -81,7 +94,12 @@ def plan_retrieval(question: str, chat_history: list[dict] | None = None) -> Ret
     # needs real judgment, not simple binary classification. Moving this
     # to the fast model caused real category-selection errors in testing.
     llm = get_llm(task="rag")
-    planner = llm.with_structured_output(RetrievalPlan)
+    # Use json_mode for portability across Groq's model lineup — tool-calling
+    # behaviour varies between models (qwen returns XML params, openai models
+    # need tool_choice=required). json_mode + explicit schema in the system
+    # prompt works reliably on all current free-tier Groq models.
+    schema_str = RetrievalPlan.model_json_schema()
+    planner = llm.with_structured_output(RetrievalPlan, method="json_mode")
 
     history_text = ""
     if chat_history:
@@ -97,11 +115,18 @@ def plan_retrieval(question: str, chat_history: list[dict] | None = None) -> Ret
             f"{history_text}\n"
         )
 
-    plan = planner.invoke(
-        [("system", PLANNER_PROMPT), ("human", f"{question}{history_text}")]
+    system_prompt = (
+        f"{PLANNER_PROMPT}\n\n"
+        f"You MUST respond with valid JSON matching EXACTLY this schema "
+        f"(use these exact field names, no extras):\n{schema_str}"
     )
-    print(
-        f"[rag] plan: category={plan.category_filter}, month={plan.month_filter}, "
+    plan = llm_call_with_retry(
+        planner.invoke,
+        [("system", system_prompt), ("human", f"{question}{history_text}")],
+        task="rag_planner"
+    )
+    logger.info(
+        f"plan: category={plan.category_filter} month={plan.month_filter} "
         f"reasoning={plan.reasoning!r}"
     )
     return plan
@@ -173,14 +198,15 @@ def answer_question(
     plan = plan_retrieval(question, chat_history=chat_history)
     if not plan.needs_data:
         llm = get_llm(task="rag")
-        return llm.invoke(question).content
+        raw = llm.invoke(question).content
+        return _strip_think_tags(raw)
 
     relevant = filter_transactions(transactions, plan)
     context = "\n".join(
         f"{t.date} | {t.description} | {t.amount}" for t in relevant
     )
     stats = _precompute_stats(relevant)
-    print(f"[rag] filtered context ({len(relevant)} rows):\n{context}\n{stats}")
+    logger.info(f"filtered context ({len(relevant)} rows): {context[:200]}...")
 
     history_text = ""
     if chat_history:
@@ -192,23 +218,25 @@ def answer_question(
 
     llm = get_llm(task="rag")
     prompt = (
+        "/no_think\n"
         f"Raw transaction data (this list is COMPLETE and EXCLUSIVE for the "
-        f"filter applied — do not add, assume, or reason about any other "
+        f"filter applied -- do not add, assume, or reason about any other "
         f"transactions, even ones you think might also fit the category):\n"
         f"{context}\n\n"
         f"{stats}\n"
         f"{history_text}\n"
         f"Question: {question}\n"
         "IMPORTANT: use the pre-computed statistics above directly for any "
-        "totals, counts, or 'biggest expense' questions — do NOT manually "
+        "totals, counts, or 'biggest expense' questions -- do NOT manually "
         "add up the raw transaction amounts yourself, that's how arithmetic "
         "errors happen. Do NOT expand the category definition to include "
         "transactions not shown above, even if they seem related. Use the "
         "raw transaction list only for details like merchant names or "
-        "individual amounts. Answer in one clear, concise paragraph — do "
+        "individual amounts. Answer in one clear, concise paragraph -- do "
         "not repeat yourself or second-guess your own answer. If the "
         "question refers to something from earlier in the conversation "
         "(e.g. 'what about transport instead'), use the recent "
         "conversation to resolve what it's asking."
     )
-    return llm.invoke(prompt).content
+    raw = llm_call_with_retry(llm.invoke, prompt, task="rag").content
+    return _strip_think_tags(raw)

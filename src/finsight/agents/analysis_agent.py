@@ -14,8 +14,11 @@ from collections import defaultdict
 
 from pydantic import BaseModel
 
-from finsight.config import get_llm
+from finsight.config import get_llm, llm_call_with_retry
+from finsight.logging_setup import get_logger
 from finsight.models import MonthlyReport, SpendingInsight, Transaction
+
+logger = get_logger(__name__)
 
 
 class InsightList(BaseModel):
@@ -66,15 +69,23 @@ def generate_narrative_insights(
     totals: dict[str, float], rule_based_flags: list[SpendingInsight]
 ) -> list[SpendingInsight]:
     llm = get_llm(task="analysis")
-    structured_llm = llm.with_structured_output(InsightList)
+    schema_str = InsightList.model_json_schema()
+    structured_llm = llm.with_structured_output(InsightList, method="json_mode")
 
     context = (
         f"Category totals this month: {totals}\n\n"
         f"Rule-based anomaly flags already detected: "
         f"{[f.model_dump() for f in rule_based_flags]}"
     )
-    result: InsightList = structured_llm.invoke(
-        [("system", NARRATIVE_PROMPT), ("human", context)]
+    system_prompt = (
+        f"{NARRATIVE_PROMPT}\n\n"
+        f"You MUST respond with valid JSON matching EXACTLY this schema "
+        f"(use these exact field names, no extras):\n{schema_str}"
+    )
+    result: InsightList = llm_call_with_retry(
+        structured_llm.invoke,
+        [("system", system_prompt), ("human", context)],
+        task="analysis",
     )
     return result.insights
 

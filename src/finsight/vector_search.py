@@ -1,18 +1,24 @@
 """
 Optional extension — Phase 4 upgrade: real vector-store RAG.
 
-Your main pipeline (rag_agent.py) uses "vectorless RAG" — filtering
+STATUS: Optional / not wired into the main supervisor graph.
+The main pipeline (rag_agent.py) uses "vectorless RAG" — filtering
 transactions by category/month with plain Python. This module adds real
 embedding-based semantic search on top, for questions that don't map
-cleanly to a fixed category.
+cleanly to a fixed category (e.g. "coffee shop purchases" without using
+the word "food").
 
-Uses local HuggingFace embeddings (all-MiniLM-L6-v2) — runs on your own
-machine, no additional API key needed. Only cost is a one-time ~90MB
-model download the first time you run it.
+Why it isn't the default:
+- The keyword RAG is faster, cheaper, and fully deterministic for the
+  structured query types the main eval suite tests.
+- Embedding-based search shines for free-text merchant queries where the
+  user doesn't know or care about category labels — a real differentiator
+  for production but not the bottleneck here.
 
-Not wired into the main supervisor graph by default, so trying it can't
-break the working pipeline. To use:
+README comparison: see the "Vector Search vs Keyword RAG" section in README.md
+for an accuracy/latency comparison on queries that are ambiguous by category.
 
+To try it:
     uv pip install -e ".[vectorstore]"
     python -m finsight.vector_search
 """
