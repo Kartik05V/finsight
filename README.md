@@ -91,24 +91,16 @@ streamlit run app.py          # UI
 turns in both the CLI and Streamlit app, so follow-ups like "what about
 groceries instead?" resolve using earlier context.
 
-**2. LLM Gateway (task-based model routing + rate limiting)** —
+**2. LLM Gateway (task-based model routing + failover + rate limiting)** —
 `config.py`'s `get_llm(task=...)` routes different tasks to different
-models:
+models depending on the `FINSIGHT_PROVIDER` setting (`groq`, `openai`, or `hybrid`).
 
-| Task | Model | Why |
-|---|---|---|
-| `extraction` | fast (`llama-3.1-8b-instant`) | repetitive structured parsing |
-| `routing` | fast | simple intent classification |
-| `rag` | strong (`llama-3.3-70b-versatile`) | must filter/sum data correctly |
-| `analysis` | strong | narrative insight generation needs judgment |
+In `hybrid` mode, the system leverages:
+- **Gemini 3.6 Flash**: Fast, massive context window for chunkless CSV extraction.
+- **Gemini 3.1 Pro**: Deep reasoning for generating narrative financial reports.
+- **Groq (Qwen)**: Ultra-fast UI response for simple intent routing and RAG.
 
-Every `get_llm()` call also passes through a basic throttle
-(`FINSIGHT_MIN_CALL_INTERVAL` in `.env`, default 1 second between calls)
-so you don't blow through Groq's free-tier rate limit during a demo. Watch
-for `[gateway] task='...' -> model='...'` printed before each LLM call —
-that's the routing decision made visible.
-
-Override models via `.env`: `FINSIGHT_FAST_MODEL`, `FINSIGHT_STRONG_MODEL`.
+The gateway includes built-in exponential backoff retries to gracefully handle transient API errors and rate limits (429s). It also supports **automatic failover**: if a fast model fails to parse complex data into a schema, it automatically retries with a stronger model.
 
 **3. Optional: real vector-store RAG** — `vector_search.py` adds embedding-
 based semantic search (Chroma + local HuggingFace embeddings, no extra API
@@ -125,7 +117,7 @@ to debug it as your own first real run of this piece.
 
 ## Architecture
 
-```
+```text
 User query
     │
     ▼
@@ -134,43 +126,48 @@ Guardrails layer (PII redaction, jailbreak check)
     ▼
 Supervisor agent (LangGraph) — routes via gateway's fast model
     │
-    ├──▶ RAG agent         (gateway's strong model — transaction Q&A)
-    └──▶ Analysis agent    (gateway's strong model — spending reports)
+    ├──▶ Analyze Route ──▶ Analysis agent (gateway's strong model) ──┐
+    │                                                                │
+    └──▶ RAG Route ──────▶ RAG agent (Python filtering, no LLM math) │
+                             │                                       │
+                             ▼                                       │
+                       Grade Node (Deterministic Math Check)         │
+                       (Loops back to RAG if math is wrong, max 3x)  │
+                             │                                       │
+                             ▼                                       │
+    ┌────────────────────────┴───────────────────────────────────────┘
+    ▼
+Structured response (Pydantic-validated) + SQLite Persistence
     │
     ▼
-Structured response (Pydantic-validated) + chat_history updated
-    │
-    ▼
-CLI / Streamlit
+CLI / Streamlit (shows warning if confidence is low)
 ```
 
 ## Resume line
 
-> Built FinSight, a multi-agent personal finance assistant using LangGraph
-> and LangChain — orchestrates extraction, RAG, and analysis agents behind
-> an LLM gateway that routes tasks to fast vs. strong models, with
-> PII-redacting guardrails, conversation memory, and automated evals.
+> **FinSight (AI Finance Analyst):** Built a stateful, agentic financial application using LangGraph and Streamlit. Engineered a hybrid LLM gateway (Groq/Gemini) for task-optimized routing, and eliminated arithmetic hallucinations using a deterministic grading node, Python-based math pre-computation, and automated self-correction loops.
 
 ## Project structure
 
-```
+```text
 finsight/
 ├── pyproject.toml
 ├── .env.example
 ├── README.md
 ├── data/sample_statement.csv
 ├── src/finsight/
-│   ├── config.py               <- gateway: task routing + rate limiting
+│   ├── config.py                <- hybrid gateway: task routing, failover, rate limiting
 │   ├── models.py                <- Pydantic schemas
 │   ├── guardrails.py            <- PII redaction, jailbreak check
+│   ├── persistence.py           <- SQLite state management (session & chat history)
 │   ├── vector_search.py         <- optional semantic search
 │   ├── main.py                  <- CLI entry point
 │   └── agents/
 │       ├── extraction_agent.py
-│       ├── rag_agent.py
+│       ├── rag_agent.py         <- vectorless RAG with Python math pre-computation
 │       ├── analysis_agent.py
-│       └── supervisor.py         <- LangGraph wiring
-├── app.py                        <- Streamlit UI
+│       └── supervisor.py        <- LangGraph wiring, deterministic grading, self-correction
+├── app.py                       <- Stateful Streamlit UI
 ├── evals/
 │   ├── eval_questions.json      <- 15 test questions
 │   └── run_evals.py
