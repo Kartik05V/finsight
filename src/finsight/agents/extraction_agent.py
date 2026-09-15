@@ -1,14 +1,6 @@
-"""
-Extraction agent — Phase 2.
-
-Job: take raw statement text (or a pandas DataFrame from a CSV) and return
-a validated ExtractionResult. This is where `.with_structured_output()`
-does the heavy lifting — the LLM is forced to match the Pydantic schema,
-so you don't have to hand-write a parser for every bank's format.
-
-Uses the gateway's "extraction" task model (fast/cheap) — parsing rows
-into a fixed schema is repetitive structured work, not the kind of thing
-that needs your strongest model.
+﻿"""
+Extraction agent: converts raw statement text / CSV into validated Transaction objects.
+Uses .with_structured_output() so the LLM is forced to match the Pydantic schema.
 """
 from pathlib import Path
 
@@ -40,12 +32,7 @@ def extract_transactions(raw_statement_text: str) -> ExtractionResult:
         ("human", raw_statement_text),
     ]
 
-    # Try the fast/cheap model first (the gateway's normal routing for
-    # this task). If it fails on this schema — smaller models can be
-    # less reliable at strict function-calling format for complex,
-    # multi-field schemas even when the underlying content is correct —
-    # fall back to the strong model instead of crashing. This is itself
-    # a real gateway pattern: automatic failover, not just cost routing.
+    # Try fast model first; fall back to strong model if schema validation fails
     try:
         agent = build_extraction_agent()
         result: ExtractionResult = llm_call_with_retry(agent.invoke, messages, task="extraction")
@@ -62,11 +49,7 @@ def extract_transactions(raw_statement_text: str) -> ExtractionResult:
 
 
 def load_statement_text(csv_path: str | Path, chunk_size: int = 40) -> list[str]:
-    """
-    Reads a raw CSV statement and splits it into text chunks of `chunk_size`
-    rows each. Chunking keeps each LLM call small, cheap, and reliable —
-    a 500-row statement in one call is where extraction quality falls apart.
-    """
+    """Read a CSV and split into text chunks to keep each LLM call small."""
     df = pd.read_csv(csv_path)
     rows_as_text = df.to_csv(index=False).splitlines()
     header, rows = rows_as_text[0], rows_as_text[1:]
@@ -79,16 +62,9 @@ def load_statement_text(csv_path: str | Path, chunk_size: int = 40) -> list[str]
 
 
 def validate_extraction(result: ExtractionResult) -> ExtractionResult:
-    """
-    Post-extraction validation pass (#4).
-
-    Checks for common extraction quality issues and appends warnings
-    instead of raising — the caller decides what to do with them.
-    Doesn't modify transactions, only adds metadata warnings.
-    """
+    """Post-extraction quality checks: date range, uncategorised rows, zero spend."""
     warnings = list(result.warnings)
 
-    # 1. Check dates fall within the stated period (if the LLM gave us one)
     if result.statement_period_start and result.statement_period_end:
         for t in result.transactions:
             if not (result.statement_period_start <= t.date <= result.statement_period_end):
@@ -98,7 +74,6 @@ def validate_extraction(result: ExtractionResult) -> ExtractionResult:
                     f"{result.statement_period_start}–{result.statement_period_end}"
                 )
 
-    # 2. Flag transactions the LLM left as OTHER — low-confidence category
     other_count = sum(
         1 for t in result.transactions if t.category.value == "other"
     )
@@ -108,7 +83,6 @@ def validate_extraction(result: ExtractionResult) -> ExtractionResult:
             f"(low category confidence — review manually)"
         )
 
-    # 3. Plausibility check: total spend should be positive for a real statement
     total_spend = sum(t.amount for t in result.transactions if t.amount > 0)
     if result.transactions and total_spend == 0:
         warnings.append(
@@ -127,19 +101,15 @@ def validate_extraction(result: ExtractionResult) -> ExtractionResult:
 
 
 def extract_from_csv(csv_path: str | Path, chunk_size: int = 40) -> ExtractionResult:
-    """
-    Full pipeline: read CSV -> chunk -> extract each chunk -> merge results.
-    This is what main.py and the evals runner both call.
-    """
+    """Full pipeline: read CSV -> chunk -> extract -> merge -> validate."""
     import os
     provider = os.getenv("FINSIGHT_PROVIDER", "groq")
 
-    # If using hybrid mode with Gemini, we can pass the whole CSV at once
-    # because Gemini 1.5 Flash has a 1M token context window.
     if provider == "hybrid":
+        # Gemini has a 1M token context window — send the whole CSV at once
         df = pd.read_csv(csv_path)
         raw_text = df.to_csv(index=False)
-        logger.info(f"Hybrid mode: bypassing chunking, sending entire {len(df)} row CSV to Gemini")
+        logger.info(f"Hybrid mode: sending entire {len(df)} row CSV to Gemini")
         result = extract_transactions(raw_text)
         return validate_extraction(result)
 
@@ -157,9 +127,6 @@ def extract_from_csv(csv_path: str | Path, chunk_size: int = 40) -> ExtractionRe
 
 
 if __name__ == "__main__":
-    # Phase 2 checkpoint: run `python -m finsight.agents.extraction_agent`
-    # and confirm you get back 15 clean Transaction objects matching
-    # data/sample_statement.csv (no LLM math, no hallucinated rows).
     sample_path = Path(__file__).parent.parent.parent.parent / "data" / "sample_statement.csv"
     result = extract_from_csv(sample_path)
     print(f"Extracted {len(result.transactions)} transactions, "

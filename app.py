@@ -1,13 +1,6 @@
-"""
-Phase 8 — Streamlit front end.
-Run with: streamlit run app.py
-
-Changes:
-- Persistence (#7): transactions and chat history are saved to SQLite
-  (via persistence.py) so state survives page reloads within a session.
-- Low-confidence banner (#3): if the self-correction loop exhausted all
-  retries without passing the numeric grade, shows a warning banner
-  so the user knows to double-check the number.
+﻿"""
+Streamlit front end. Run with: streamlit run app.py
+Transactions and chat history are persisted to SQLite so state survives page reloads.
 """
 import uuid
 
@@ -27,14 +20,12 @@ from finsight.persistence import (
 st.set_page_config(page_title="FinSight", page_icon="💰")
 st.title("FinSight — agentic finance analyst")
 
-# Each browser session gets a stable UUID stored in session_state.
-# This is the key that persistence.py uses to scope all DB reads/writes.
+# Stable UUID per browser session — scopes all DB reads/writes
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
 session_id = st.session_state.session_id
 
-# --- Restore transactions from DB on first load ---------------------------
 if "transactions" not in st.session_state:
     restored = load_transactions(session_id)
     st.session_state.transactions = restored if restored else None
@@ -42,11 +33,9 @@ if "transactions" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Restore chat history from DB (used to hydrate the graph state)
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = load_chat_history(session_id)
 
-# --- Upload ------------------------------------------------------------------
 uploaded = st.file_uploader("Upload a statement CSV", type="csv")
 
 if uploaded is not None and st.session_state.transactions is None:
@@ -58,8 +47,6 @@ if uploaded is not None and st.session_state.transactions is None:
         result = extract_from_csv(tmp_path)
         os.unlink(tmp_path)
         st.session_state.transactions = result.transactions
-
-        # Persist for this session so a page reload doesn't wipe everything
         save_transactions(session_id, result.transactions)
 
         if result.warnings:
@@ -101,9 +88,6 @@ if st.session_state.transactions:
 
                     st.write(answer)
 
-                    # Low-confidence banner — shown when the self-correction
-                    # loop exhausted all retry attempts without passing the
-                    # programmatic numeric grade (#3).
                     if low_confidence:
                         st.warning(
                             "⚠️ **Low confidence**: this answer didn't pass the "
@@ -114,7 +98,6 @@ if st.session_state.transactions:
                     if result.get("report"):
                         st.json(result["report"].model_dump())
 
-                    # Persist the new messages to DB
                     save_message(session_id, "user", query)
                     save_message(session_id, "assistant", answer)
 

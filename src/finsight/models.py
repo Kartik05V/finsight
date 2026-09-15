@@ -1,7 +1,4 @@
-"""
-Pydantic schemas — this is what forces the LLM to give you structured data
-instead of prose.
-"""
+﻿"""Pydantic schemas — forces the LLM to return structured data instead of prose."""
 from datetime import date
 from enum import Enum
 from typing import Literal
@@ -48,7 +45,7 @@ class SpendingInsight(BaseModel):
 
 
 class MonthlyReport(BaseModel):
-    """What the analysis agent returns — Phase 6."""
+    """What the analysis agent returns."""
     month: str  # e.g. "2026-06"
     total_spend: float
     total_by_category: dict[str, float]
@@ -56,32 +53,18 @@ class MonthlyReport(BaseModel):
 
 
 class FinSightState(BaseModel):
-    """
-    Shared state passed between LangGraph nodes (Phase 5).
-    """
+    """Shared state passed between LangGraph nodes."""
     user_query: str
     redacted_query: str | None = None
     transactions: list[Transaction] = Field(default_factory=list)
     answer: str | None = None
     report: MonthlyReport | None = None
-    # Literal type keeps this in sync with RouteDecision.destination and
-    # catches typos at type-check time instead of silently routing wrong.
     route: Literal["rag", "analyze"] | None = None
     chat_history: list[dict] = Field(
         default_factory=list,
-        description="Running list of {'role': 'user'|'assistant', 'content': str} "
-        "so follow-up questions like 'what about last month?' have context.",
+        description="Running list of {'role': 'user'|'assistant', 'content': str}",
     )
-    # --- Self-correction loop fields (#3) -----------------------------------
-    # attempts counts how many times rag_node has run for this query.
     attempts: int = 0
-    # answer_score is set by grade_node: 1.0 = programmatic check passed,
-    # 0.0 = number not found in answer, None = not yet graded.
     answer_score: float | None = None
-    # low_confidence is True when all retry attempts exhausted without a
-    # passing grade — signals the UI to show a "please double-check" banner.
-    low_confidence: bool = False
-    # best_answer preserves the highest-scoring answer across loop iterations
-    # so if we exhaust retries the user still gets the best attempt, not
-    # just the last one.
-    best_answer: str | None = None
+    low_confidence: bool = False  # True when all retry attempts exhausted without passing grade
+    best_answer: str | None = None  # highest-scoring answer across retry iterations

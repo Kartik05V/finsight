@@ -1,15 +1,7 @@
-"""
-SQLite persistence layer (#7).
-
-Persists parsed transactions and chat history across sessions so data
-survives page reloads, process restarts, and multi-session CLI use.
-
-Storage: a single SQLite file at FINSIGHT_DB_PATH (default ~/.finsight/finsight.db).
-No new runtime dependency — uses stdlib sqlite3.
-
-Schema:
-  transactions  (session_id TEXT, data JSON, saved_at TIMESTAMP)
-  chat_messages (session_id TEXT, role TEXT, content TEXT, ts TIMESTAMP)
+﻿"""
+SQLite persistence: saves transactions and chat history across sessions.
+DB at FINSIGHT_DB_PATH (default ~/.finsight/finsight.db). No extra dependencies.
+Schema: transactions(session_id, data JSON, saved_at) | chat_messages(session_id, role, content, ts)
 """
 import json
 import os
@@ -58,15 +50,8 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 def save_transactions(session_id: str, transactions: list[Transaction]) -> None:
-    """
-    Serialize and persist the transaction list for a session.
-    Replaces any existing data for the same session_id (upsert semantics).
-    """
+    """Persist the transaction list for a session (replaces existing data)."""
     data = json.dumps([t.model_dump(mode="json") for t in transactions])
     with _connect() as conn:
         _ensure_tables(conn)
@@ -82,10 +67,7 @@ def save_transactions(session_id: str, transactions: list[Transaction]) -> None:
 
 
 def load_transactions(session_id: str) -> list[Transaction]:
-    """
-    Load and deserialize transactions for a session.
-    Returns an empty list if no data has been saved yet.
-    """
+    """Load transactions for a session. Returns [] if none saved yet."""
     with _connect() as conn:
         _ensure_tables(conn)
         row = conn.execute(
@@ -114,10 +96,7 @@ def save_message(session_id: str, role: str, content: str) -> None:
 
 
 def load_chat_history(session_id: str) -> list[dict]:
-    """
-    Return the full ordered chat history for a session as a list of
-    {'role': str, 'content': str} dicts, oldest-first.
-    """
+    """Return full ordered chat history for a session as list of {role, content} dicts."""
     with _connect() as conn:
         _ensure_tables(conn)
         rows = conn.execute(

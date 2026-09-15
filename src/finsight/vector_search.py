@@ -1,26 +1,7 @@
-"""
-Optional extension — Phase 4 upgrade: real vector-store RAG.
-
-STATUS: Optional / not wired into the main supervisor graph.
-The main pipeline (rag_agent.py) uses "vectorless RAG" — filtering
-transactions by category/month with plain Python. This module adds real
-embedding-based semantic search on top, for questions that don't map
-cleanly to a fixed category (e.g. "coffee shop purchases" without using
-the word "food").
-
-Why it isn't the default:
-- The keyword RAG is faster, cheaper, and fully deterministic for the
-  structured query types the main eval suite tests.
-- Embedding-based search shines for free-text merchant queries where the
-  user doesn't know or care about category labels — a real differentiator
-  for production but not the bottleneck here.
-
-README comparison: see the "Vector Search vs Keyword RAG" section in README.md
-for an accuracy/latency comparison on queries that are ambiguous by category.
-
-To try it:
-    uv pip install -e ".[vectorstore]"
-    python -m finsight.vector_search
+﻿"""
+Optional extension: embedding-based semantic search on transactions.
+Not wired into the main pipeline — the default uses keyword/category RAG.
+To try it: uv pip install -e ".[vectorstore]" && python -m finsight.vector_search
 """
 from pathlib import Path
 

@@ -1,24 +1,6 @@
-"""
-Supervisor agent — hardened.
-
-Ties RAG and analysis together under one stateful LangGraph. Extraction is
-treated as a one-time preprocessing step (done once when a statement is
-uploaded, in main.py) rather than something re-run on every query.
-
-Graph shape (with self-correction loop, #3):
-
-    guardrails -> route -> [rag | analyze]
-                                |
-                           grade_node  (rag path only)
-                                |
-                   ┌────────────────────────────┐
-                   │ score OK → END             │
-                   │ attempts < MAX → rag       │ (regenerate)
-                   │ attempts == MAX → END      │ (low_confidence=True)
-                   └────────────────────────────┘
-                   analyze → END directly (no numeric grading)
-
-route_node (#2): on parse failure defaults to "rag" instead of crashing.
+﻿"""
+Supervisor: ties RAG and analysis together in a LangGraph stateful pipeline.
+Graph: guardrails -> route -> [rag -> grade -> (retry|end)] | analyze -> end
 """
 import re
 from datetime import date
@@ -37,8 +19,8 @@ from finsight.agents.analysis_agent import generate_report
 logger = get_logger(__name__)
 
 MAX_ATTEMPTS = 3
-GRADE_PASS_THRESHOLD = 0.8   # score at or above this → accept answer
-NUMERIC_TOLERANCE = 0.05     # 5% relative tolerance for number matching
+GRADE_PASS_THRESHOLD = 0.8
+NUMERIC_TOLERANCE = 0.05  # 5% relative tolerance for number matching
 
 
 class RouteDecision(BaseModel):
@@ -55,10 +37,6 @@ ROUTER_PROMPT = """Classify the user's finance question into exactly one route:
 """
 
 
-# ---------------------------------------------------------------------------
-# Nodes
-# ---------------------------------------------------------------------------
-
 def guardrail_node(state: FinSightState) -> dict:
     safe_text, metadata = apply_guardrails(state.user_query)
     logger.info(f"guardrails passed pii={metadata['pii_types_found']} injection_suspected={metadata['injection_suspected']}")
@@ -66,14 +44,9 @@ def guardrail_node(state: FinSightState) -> dict:
 
 
 def route_node(state: FinSightState) -> dict:
-    """
-    Routes to 'rag' or 'analyze'. (#2) On any failure — parse error,
-    API timeout, unexpected schema — defaults to 'rag' instead of crashing.
-    """
+    """Routes to 'rag' or 'analyze'. Defaults to 'rag' on any failure."""
     try:
         llm = get_llm(task="routing")
-        # Use json_mode for portability across Groq's model lineup — mirrors
-        # the same fix applied in rag_agent.plan_retrieval.
         schema_str = RouteDecision.model_json_schema()
         system_prompt = (
             f"{ROUTER_PROMPT}\n\n"
@@ -132,13 +105,8 @@ def analyze_node(state: FinSightState) -> dict:
     return {"report": report, "answer": answer, "chat_history": updated_history}
 
 
-# ---------------------------------------------------------------------------
-# Programmatic grader (#3)
-# ---------------------------------------------------------------------------
-
 def _extract_numbers_from_text(text: str) -> list[float]:
-    """Pull out every number-looking token from an answer string."""
-    # Matches integers or decimals, with optional thousands separators
+    """Pull every number-looking token from an answer string."""
     raw = re.findall(r"\b[\d,]+(?:\.\d+)?\b", text)
     results = []
     for r in raw:
@@ -157,20 +125,9 @@ def _numbers_match(expected: float, candidates: list[float], tol: float = NUMERI
 
 
 def grade_node(state: FinSightState) -> dict:
-    """
-    Programmatic answer grader — no LLM call needed.
-
-    1. Re-runs the same filter logic used by rag_node to get the relevant
-       transactions for this query.
-    2. Computes the expected total in pure Python (the ground truth).
-    3. Checks whether the LLM's answer contains that number (±5% tolerance).
-    4. Updates answer_score, best_answer, and optionally low_confidence.
-    """
+    """Programmatic grader: re-derives expected total in Python and checks if the LLM's answer contains it."""
     answer = state.answer or ""
 
-    # Re-derive the retrieval plan to know what the expected number is.
-    # We already computed this inside rag_node but don't persist it to state;
-    # re-running it is cheap (no LLM, no I/O) and keeps state lean.
     try:
         plan = plan_retrieval(state.redacted_query, chat_history=state.chat_history[:-2] or None)
         relevant = filter_transactions(state.transactions, plan)
@@ -190,7 +147,6 @@ def grade_node(state: FinSightState) -> dict:
         f"candidates={candidates} score={score}"
     )
 
-    # Track the best answer seen so far across retries
     prev_score = state.answer_score if state.answer_score is not None else -1.0
     best_answer = answer if score >= prev_score else (state.best_answer or answer)
 
@@ -201,12 +157,7 @@ def grade_node(state: FinSightState) -> dict:
 
 
 def grade_condition(state: FinSightState) -> str:
-    """
-    Conditional edge after grade_node:
-    - score >= threshold → END (accept answer)
-    - attempts < MAX and score low → loop back to rag (regenerate)
-    - attempts == MAX → END with low_confidence=True (best effort)
-    """
+    """Routes to end (pass), retry rag (low score), or end with low_confidence (exhausted)."""
     score = state.answer_score if state.answer_score is not None else 0.0
 
     if score >= GRADE_PASS_THRESHOLD:
@@ -220,7 +171,6 @@ def grade_condition(state: FinSightState) -> str:
         )
         return "retry"
 
-    # Exhausted retries — mark low confidence so the UI can warn the user
     logger.warning(
         f"grade exhausted all {MAX_ATTEMPTS} attempts score={score:.2f}, "
         f"returning best_answer with low_confidence=True"
@@ -229,16 +179,12 @@ def grade_condition(state: FinSightState) -> str:
 
 
 def _finalize_low_confidence(state: FinSightState) -> dict:
-    """Pseudo-node: sets low_confidence flag and surfaces best_answer."""
+    """Sets low_confidence flag and surfaces the best answer seen across retries."""
     return {
         "low_confidence": True,
         "answer": state.best_answer or state.answer,
     }
 
-
-# ---------------------------------------------------------------------------
-# Graph construction
-# ---------------------------------------------------------------------------
 
 def build_graph():
     graph = StateGraph(FinSightState)
@@ -272,9 +218,6 @@ def build_graph():
 
 
 if __name__ == "__main__":
-    # Phase 5 checkpoint: run `python -m finsight.agents.supervisor` and
-    # confirm the first query routes to rag (a real number in the answer)
-    # and the second routes to analyze (a MonthlyReport comes back).
     from pathlib import Path
     from finsight.agents.extraction_agent import extract_from_csv
 

@@ -1,13 +1,6 @@
-"""
-Analysis agent — Phase 6.
-
-This is the "insight" layer. Note: the aggregation math (totals, z-scores)
-is plain Python, NOT the LLM's job — only the narrative insights and
-severity judgment go through the LLM. Don't ask an LLM to do arithmetic
-it doesn't need to.
-
-Uses the gateway's "analysis" task model (stronger) — writing sensible,
-non-generic financial insights needs more judgment than fast extraction.
+﻿"""
+Analysis agent: aggregates transactions by category in Python,
+then uses the LLM only for narrative insights and severity judgment.
 """
 import statistics
 from collections import defaultdict
@@ -43,10 +36,7 @@ def aggregate_by_category(transactions: list[Transaction]) -> dict[str, float]:
 def flag_anomalies(
     current_month: dict[str, float], history: list[dict[str, float]]
 ) -> list[SpendingInsight]:
-    """
-    Simple anomaly check: flag a category if this month's spend is more than
-    1.5x the historical average for that category.
-    """
+    """Flag a category if this month's spend is more than 1.5x the historical average."""
     insights = []
     for category, amount in current_month.items():
         past_values = [h.get(category, 0) for h in history if h.get(category, 0) > 0]
@@ -114,9 +104,6 @@ def generate_report(
 
 
 if __name__ == "__main__":
-    # Phase 6 checkpoint: run `python -m finsight.agents.analysis_agent`
-    # and confirm you get a MonthlyReport with real totals from the sample
-    # CSV plus 2-4 LLM-written insights.
     from pathlib import Path
     from finsight.agents.extraction_agent import extract_from_csv
 
